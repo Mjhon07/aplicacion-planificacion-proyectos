@@ -1,0 +1,10 @@
+{
+  "description": "Streamline project planning and optimization with interactive network graphs, allowing users to analyze activities, costs, and timelines using CPM and PERT methods.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
