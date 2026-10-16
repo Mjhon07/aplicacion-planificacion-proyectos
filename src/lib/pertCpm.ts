@@ -29,6 +29,7 @@ export function createActivity(partial?: Partial<Activity>, existing: Activity[]
   return {
     id,
     name: partial?.name ?? `Actividad ${id}`,
+    phase: partial?.phase ?? "",
     predecessors: partial?.predecessors ?? [],
     duration: partial?.duration ?? 2,
     optimistic: partial?.optimistic ?? 1,
@@ -45,11 +46,13 @@ export function createActivity(partial?: Partial<Activity>, existing: Activity[]
 /** ID reservado del nodo virtual de inicio en el diagrama */
 export const START_NODE_ID = "INICIO";
 
+const PREDECESSOR_WORDS = new Set(["Y", "DE", "DEL", "AND", "OR", "CON", "LAS", "LOS", "EL", "LA"]);
+
 export function parsePredecessors(value: string): string[] {
   const raw = value
-    .split(/[,;\s]+/)
+    .split(/[,;\s\-–—/]+/)
     .map((s) => s.trim().toUpperCase())
-    .filter((s) => s && s !== "-" && s !== "—" && s !== "NINGUNA" && s !== "N/A" && s !== START_NODE_ID);
+    .filter((s) => s && s !== "-" && s !== "—" && s !== "NINGUNA" && s !== "N/A" && s !== START_NODE_ID && !PREDECESSOR_WORDS.has(s));
 
   // "AB" o "ABC" → A, B, C (atajo al tipiar sin comas)
   const expanded: string[] = [];
@@ -396,83 +399,43 @@ export function edgePath(from: GraphNodeLayout, to: GraphNodeLayout, nodeHalfW =
   return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 }
 
+export const SAMPLE_PROJECT_NAME = "Reconocimiento de lengua de señas (LSC)";
+
+const PHASE_DATA = "Fases iniciales y procesamiento de datos";
+const PHASE_APP = "Desarrollo frontend, integración y pruebas";
+
+/** Duración dada por el usuario; a/m/b y crashing se derivan para que el ejemplo sirva en los 3 modos. */
+function sampleActivity(
+  id: string,
+  name: string,
+  predecessors: string[],
+  weeks: number,
+  cost: number,
+  phase: string,
+): Activity {
+  return createActivity({
+    id,
+    name,
+    phase,
+    predecessors,
+    duration: weeks,
+    optimistic: Math.max(1, weeks - 1),
+    mostLikely: weeks,
+    pessimistic: weeks + 2,
+    normalTime: weeks,
+    crashTime: Math.max(1, weeks - 1),
+    normalCost: cost,
+    crashCost: Math.round(cost * 1.4),
+  });
+}
+
 export const SAMPLE_ACTIVITIES: Activity[] = [
-  createActivity({
-    id: "A",
-    name: "Definir alcance",
-    predecessors: [],
-    duration: 2,
-    optimistic: 1,
-    mostLikely: 2,
-    pessimistic: 3,
-    normalTime: 2,
-    crashTime: 1,
-    normalCost: 1200,
-    crashCost: 1800,
-  }),
-  createActivity({
-    id: "B",
-    name: "Diseño conceptual",
-    predecessors: ["A"],
-    duration: 3,
-    optimistic: 2,
-    mostLikely: 3,
-    pessimistic: 5,
-    normalTime: 3,
-    crashTime: 2,
-    normalCost: 2400,
-    crashCost: 3200,
-  }),
-  createActivity({
-    id: "C",
-    name: "Investigación técnica",
-    predecessors: ["A"],
-    duration: 4,
-    optimistic: 2,
-    mostLikely: 4,
-    pessimistic: 6,
-    normalTime: 4,
-    crashTime: 2,
-    normalCost: 1800,
-    crashCost: 2800,
-  }),
-  createActivity({
-    id: "D",
-    name: "Desarrollo",
-    predecessors: ["B"],
-    duration: 6,
-    optimistic: 4,
-    mostLikely: 6,
-    pessimistic: 9,
-    normalTime: 6,
-    crashTime: 3,
-    normalCost: 5400,
-    crashCost: 8200,
-  }),
-  createActivity({
-    id: "E",
-    name: "Integración",
-    predecessors: ["C", "D"],
-    duration: 3,
-    optimistic: 2,
-    mostLikely: 3,
-    pessimistic: 5,
-    normalTime: 3,
-    crashTime: 2,
-    normalCost: 3200,
-    crashCost: 4100,
-  }),
-  createActivity({
-    id: "F",
-    name: "Pruebas y entrega",
-    predecessors: ["E"],
-    duration: 2,
-    optimistic: 1,
-    mostLikely: 2,
-    pessimistic: 4,
-    normalTime: 2,
-    crashTime: 1,
-    normalCost: 1600,
-    crashCost: 2400,
-  }),
+  sampleActivity("A", "Requerimientos y Arquitectura", [], 3, 3500, PHASE_DATA),
+  sampleActivity("B", "Recolección de Corpus LSC", ["A"], 4, 2000, PHASE_DATA),
+  sampleActivity("C", "Preprocesamiento (Landmarks)", ["B"], 3, 2500, PHASE_DATA),
+  sampleActivity("D", "Entrenamiento del Modelo de IA", ["C"], 5, 4000, PHASE_DATA),
+  sampleActivity("E", "Validación y Ajuste IA", ["D"], 2, 1500, PHASE_APP),
+  sampleActivity("F", "Desarrollo de App Móvil", ["A"], 6, 5000, PHASE_APP),
+  sampleActivity("G", "Integración IA + App", ["E", "F"], 3, 2500, PHASE_APP),
+  sampleActivity("H", "Pruebas de Campo y Despliegue", ["G"], 2, 1000, PHASE_APP),
 ];

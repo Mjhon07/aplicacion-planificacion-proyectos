@@ -3,6 +3,8 @@ export type Method = "CPM" | "PERT" | "Crashing";
 export interface Activity {
   id: string;
   name: string;
+  /** Agrupación opcional (fase del proyecto) */
+  phase: string;
   /** IDs de predecesoras; vacío = sin predecesoras */
   predecessors: string[];
   /** Modo CPM: duración en semanas */

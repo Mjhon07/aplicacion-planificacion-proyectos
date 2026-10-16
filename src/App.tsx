@@ -1,7 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import CostCurve from "./components/CostCurve";
+import GanttChart from "./components/GanttChart";
 import NetworkDiagram from "./components/NetworkDiagram";
+import ReportDialog from "./components/ReportDialog";
+import { compressToTarget } from "./lib/compress";
+import { buildWorkbook, downloadWorkbook, parseActivitiesSheet } from "./lib/excel";
+import { buildNetworkSvg, downloadPngFile } from "./lib/graphImage";
+import { buildReport } from "./lib/report";
+import { completionProbability } from "./lib/stats";
 import {
   SAMPLE_ACTIVITIES,
+  SAMPLE_PROJECT_NAME,
   computeProject,
   createActivity,
   formatPredecessors,
@@ -154,8 +163,17 @@ function App() {
   const [crashHistory, setCrashHistory] = useState<CrashHistoryEntry[]>([]);
   const [calcPulse, setCalcPulse] = useState(0);
   const [activityCountInput, setActivityCountInput] = useState(String(SAMPLE_ACTIVITIES.length));
+  const [excelNote, setExcelNote] = useState("");
+  const [reportOpen, setReportOpen] = useState(false);
+  const [targetWeeks, setTargetWeeks] = useState(0);
+  const [targetEdited, setTargetEdited] = useState(false);
+  const [savedBase, setSavedBase] = useState<Activity[] | null>(null);
+  const [compressTarget, setCompressTarget] = useState(20);
+  const [compressEdited, setCompressEdited] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const result = useMemo(() => computeProject(activities, method), [activities, method, calcPulse]);
+  const pertResult = useMemo(() => (method === "PERT" ? result : computeProject(activities, "PERT")), [activities, method, result]);
   const graph = useMemo(() => layoutGraph(result.activities), [result.activities]);
   const layoutById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
   const computedById = useMemo(() => new Map(result.activities.map((a) => [a.id, a])), [result.activities]);
@@ -163,6 +181,43 @@ function App() {
     if (!result.criticalPath.length) return activities.length === 0 ? "Inicio" : "—";
     return ["Inicio", ...result.criticalPath].join(" → ");
   }, [result.criticalPath, activities.length]);
+
+  useEffect(() => {
+    if (!targetEdited) setTargetWeeks(pertResult.projectDuration);
+  }, [pertResult.projectDuration, targetEdited]);
+
+  const odds = useMemo(
+    () => completionProbability(targetWeeks, pertResult.projectDuration, pertResult.projectStdDev ?? 0),
+    [targetWeeks, pertResult.projectDuration, pertResult.projectStdDev],
+  );
+  const networkSvg = useMemo(
+    () => buildNetworkSvg(graph.displayActivities, graph.edges, graph.nodes, graph.width, graph.height),
+    [graph],
+  );
+  const baseActivities = useMemo(() => {
+    const source = savedBase ?? activities;
+    return source.map((activity) => ({ ...activity, predecessors: [...activity.predecessors], crashed: false }));
+  }, [savedBase, activities]);
+  const compressPlan = useMemo(() => compressToTarget(baseActivities, compressTarget), [baseActivities, compressTarget]);
+  const baseResult = useMemo(() => computeProject(baseActivities, "Crashing"), [baseActivities]);
+  const acceleratedResult = useMemo(() => computeProject(compressPlan.activities, "Crashing"), [compressPlan.activities]);
+
+  useEffect(() => {
+    if (!compressEdited) setCompressTarget(Math.max(0, Math.round((baseResult.projectDuration - 2) * 100) / 100));
+  }, [baseResult.projectDuration, compressEdited]);
+
+  const reportText = useMemo(
+    () =>
+      `${buildReport({
+        projectName: SAMPLE_PROJECT_NAME,
+        method,
+        activities,
+        result,
+        pert: pertResult,
+        targetWeeks,
+      })}\n\n${compressPlan.summary}`,
+    [method, activities, result, pertResult, targetWeeks, compressPlan.summary],
+  );
 
   const active = activities.find((a) => a.id === selected) ?? activities[0];
   const activeComputed = active ? computedById.get(active.id) : undefined;
@@ -269,13 +324,26 @@ function App() {
 
   const calculate = () => setCalcPulse((n) => n + 1);
 
+  const applyCompressedPlan = () => {
+    setActivities(compressPlan.activities.map((activity) => ({ ...activity, predecessors: [...activity.predecessors] })));
+    setCrashHistory(compressPlan.steps);
+    setMethod("Crashing");
+    setExcelNote(compressPlan.reached ? `Plan acelerado aplicado: ${fmt(compressPlan.finalDuration)} sem.` : compressPlan.summary);
+  };
+
+  const restoreBasePlan = () => {
+    setActivities(baseActivities.map((activity) => ({ ...activity, predecessors: [...activity.predecessors] })));
+    setCrashHistory([]);
+    setExcelNote("Volviste al plan base, con tiempos normales.");
+  };
+
   const goToSection = (section: Section) => {
     setActiveSection(section);
     const map: Record<Section, string> = {
       dashboard: "dashboard",
       network: "network-diagram",
       activities: "activities-table",
-      analysis: "analysis-panel",
+      analysis: "plans-panel",
       history: "crash-history",
     };
     document.getElementById(map[section])?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -337,6 +405,9 @@ function App() {
             onClick={() => {
               setActivities(SAMPLE_ACTIVITIES.map((a) => ({ ...a, crashed: false })));
               setCrashHistory([]);
+              setSavedBase(null);
+              setCompressEdited(false);
+              setTargetEdited(false);
               setSelected("A");
               setActivityCountInput(String(SAMPLE_ACTIVITIES.length));
             }}
@@ -360,25 +431,51 @@ function App() {
           <div>
             <div className="eyebrow">SIMULADOR DE RED · MÉTODO PERT-CPM</div>
             <div className="page-title">
-              Planificación del proyecto <span className="status-dot">En cálculo</span>
+              {SAMPLE_PROJECT_NAME} <span className="status-dot">En cálculo</span>
             </div>
           </div>
           <div className="top-actions">
-            <span className="saved">{result.errors.length ? "Revisa las dependencias" : "Cálculo actualizado"}</span>
-            <Button
-              className="button-secondary"
-              onClick={() => {
-                const rows = result.activities
-                  .map(
-                    (a) =>
-                      `${a.id}\t${a.name}\t${formatPredecessors(a.predecessors)}\t${a.duration}\t${a.es}\t${a.ef}\t${a.ls}\t${a.lf}\t${a.slack}\t${a.critical ? "Crítica" : "Normal"}`,
-                  )
-                  .join("\n");
-                const header = "ID\tNombre\tPredecesoras\tDuración\tIC\tTC\tIL\tTL\tHolgura\tEstado\n";
-                void navigator.clipboard?.writeText(header + rows);
+            <span className="saved">{excelNote || (result.errors.length ? "Revisa las dependencias" : "Cálculo actualizado")}</span>
+            <input
+              ref={fileInputRef}
+              className="file-input"
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file) return;
+                void file.arrayBuffer().then((buffer) => {
+                  const parsed = parseActivitiesSheet(buffer);
+                  if (!parsed.activities.length) {
+                    setExcelNote(parsed.errors[0] ?? "No se pudo importar el Excel.");
+                    return;
+                  }
+                  setActivities(parsed.activities);
+                  setSavedBase(null);
+                  setCompressEdited(false);
+                  setSelected(parsed.activities[0]?.id ?? "");
+                  setActivityCountInput(String(parsed.activities.length));
+                  setCrashHistory([]);
+                  setExcelNote(
+                    parsed.errors.length
+                      ? `Importadas ${parsed.activities.length} actividades. ${parsed.errors[0]}`
+                      : `Importadas ${parsed.activities.length} actividades desde Excel.`,
+                  );
+                });
               }}
-            >
-              Exportar
+            />
+            <Button className="button-secondary" onClick={() => fileInputRef.current?.click()}>
+              Importar Excel
+            </Button>
+            <Button className="button-secondary" onClick={() => downloadWorkbook(buildWorkbook(activities, result, targetWeeks), "pathwise-lsc.xlsx")}>
+              Exportar Excel
+            </Button>
+            <Button className="button-secondary" onClick={() => setReportOpen(true)}>
+              Informe
+            </Button>
+            <Button className="button-secondary" onClick={() => downloadWorkbook(buildWorkbook(SAMPLE_ACTIVITIES), "ejemplo-actividades-lsc.xlsx")}>
+              Descargar ejemplo
             </Button>
             <Button className="button-primary" onClick={calculate}>
               <Icon name="play" size={15} />
@@ -482,6 +579,12 @@ function App() {
                 onCrash={crashActivity}
                 criticalPathLabel={criticalPathLabel}
                 projectDurationLabel={`${fmt(result.projectDuration)} semanas totales`}
+                onDownloadPng={() => {
+                  void downloadPngFile(networkSvg, "pathwise-grafo.png", graph.width, graph.height).then(
+                    () => setExcelNote("Grafo descargado en PNG."),
+                    () => setExcelNote("No se pudo descargar el grafo."),
+                  );
+                }}
               />
             </section>
 
@@ -503,6 +606,10 @@ function App() {
                     <label>
                       Nombre de la actividad
                       <input value={active.name} onChange={(e) => updateActivity(active.id, { name: e.target.value })} />
+                    </label>
+                    <label>
+                      Fase
+                      <input value={active.phase} onChange={(e) => updateActivity(active.id, { phase: e.target.value })} />
                     </label>
                     <div className="field-pair">
                       <label>
@@ -713,6 +820,108 @@ function App() {
             </aside>
           </div>
 
+          <section className="panel analysis-panel" id="gantt-chart">
+            <div className="panel-heading">
+              <div>
+                <div className="panel-title">Diagrama de Gantt</div>
+                <div className="panel-subtitle">Barra sólida: ejecución (IC a TC). Tramo claro: holgura hasta el tiempo más lejano. Según el modo activo.</div>
+              </div>
+              <div className="legend">
+                <span><i className="gantt-key critical" />Ruta crítica</span>
+                <span><i className="gantt-key normal" />Con holgura</span>
+                <span><i className="gantt-key slack" />Holgura</span>
+              </div>
+            </div>
+            <GanttChart activities={result.activities} projectDuration={result.projectDuration} />
+          </section>
+
+          <section className="panel analysis-panel" id="plans-panel">
+            <div className="panel-heading">
+              <div>
+                <div className="panel-title">Plan base y plan acelerado</div>
+                <div className="panel-subtitle">Cada actividad crítica se acelera completa, empezando por la que menos cuesta por semana ganada.</div>
+              </div>
+              <div className="report-actions">
+                <Button className="button-secondary" onClick={() => setSavedBase(activities.map((activity) => ({ ...activity, predecessors: [...activity.predecessors], crashed: false })))}>
+                  Fijar plan base
+                </Button>
+                <Button className="button-secondary" onClick={() => setSavedBase(null)} disabled={!savedBase}>
+                  Seguir el plan en pantalla
+                </Button>
+              </div>
+            </div>
+            <div className="plan-toolbar">
+              <label>
+                Quiero terminar en (semanas)
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={compressTarget}
+                  onChange={(event) => {
+                    setCompressEdited(true);
+                    setCompressTarget(Math.max(0, Number(event.target.value) || 0));
+                  }}
+                />
+              </label>
+              <p>{savedBase ? "La base está fija y no cambia si editas la red." : "La base es el plan en pantalla con tiempos normales."} {compressPlan.summary}</p>
+            </div>
+            <div className="plan-compare">
+              <article>
+                <span>Plan base</span>
+                <strong>{fmt(baseResult.projectDuration)} sem.</strong>
+                <small>{money(baseResult.totalCost)}</small>
+                <p>Inicio → {baseResult.criticalPath.join(" → ") || "—"}</p>
+              </article>
+              <article className="plan-fast">
+                <span>Plan acelerado</span>
+                <strong>{fmt(acceleratedResult.projectDuration)} sem.</strong>
+                <small>{money(acceleratedResult.totalCost)} · extra {money(acceleratedResult.totalCost - baseResult.totalCost)}</small>
+                <p>Inicio → {acceleratedResult.criticalPath.join(" → ") || "—"}</p>
+              </article>
+            </div>
+            <CostCurve points={compressPlan.points} />
+            {compressPlan.steps.length > 0 && (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>PASO</th>
+                      <th>ACELERAR</th>
+                      <th>SEMANAS GANADAS</th>
+                      <th>DURACIÓN</th>
+                      <th>COSTO EXTRA</th>
+                      <th>COSTO TOTAL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {compressPlan.steps.map((step) => (
+                      <tr key={step.step}>
+                        <td>{step.step}</td>
+                        <td>
+                          <span className="table-id critical-id">{step.activityId}</span>
+                          <strong>{step.activityName}</strong>
+                        </td>
+                        <td>−{fmt(step.weeksReduced)} sem.</td>
+                        <td>{fmt(step.projectDuration)} sem.</td>
+                        <td>+{money(step.incrementalCost)}</td>
+                        <td>{money(step.totalCost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="plan-actions">
+              <Button className="button-primary" onClick={applyCompressedPlan} disabled={!compressPlan.steps.length}>
+                Aplicar plan acelerado
+              </Button>
+              <Button className="button-secondary" onClick={restoreBasePlan}>
+                Volver al plan base
+              </Button>
+            </div>
+          </section>
+
           {method === "PERT" && (
             <section className="panel analysis-panel" id="analysis-panel">
               <div className="panel-heading">
@@ -746,6 +955,42 @@ function App() {
                   <span>Σ Pesimista (b)</span>
                   <strong>{fmt(result.projectPessimistic ?? 0)} sem.</strong>
                 </div>
+                <div>
+                  <span>μ − σ</span>
+                  <strong>{fmt(result.projectDuration - (result.projectStdDev ?? 0))} sem.</strong>
+                </div>
+                <div>
+                  <span>μ + σ</span>
+                  <strong>{fmt(result.projectDuration + (result.projectStdDev ?? 0))} sem.</strong>
+                </div>
+              </div>
+              <div className="probability-box">
+                <label>
+                  Quiero terminar en (semanas)
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={targetWeeks}
+                    onChange={(event) => {
+                      setTargetEdited(true);
+                      setTargetWeeks(Math.max(0, Number(event.target.value) || 0));
+                    }}
+                  />
+                </label>
+                <div>
+                  <span>Z = (X − μ) / σ</span>
+                  <strong>{odds.certain ? "σ = 0" : fmt(odds.z ?? 0)}</strong>
+                </div>
+                <div>
+                  <span>P(terminar en X o menos)</span>
+                  <strong>{(odds.probability * 100).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %</strong>
+                </div>
+                <p>
+                  {odds.certain
+                    ? "Las estimaciones no tienen dispersión. El proyecto termina exactamente en μ."
+                    : "Se asume que la duración del proyecto sigue una distribución normal."}
+                </p>
               </div>
             </section>
           )}
@@ -816,6 +1061,7 @@ function App() {
                 <thead>
                   <tr>
                     <th>ACTIVIDAD</th>
+                    <th>FASE</th>
                     <th>PREDECESORAS</th>
                     {method === "PERT" ? (
                       <>
@@ -850,6 +1096,7 @@ function App() {
                           <span className={`table-id ${item.critical ? "critical-id" : ""}`}>{item.id}</span>
                           <strong>{item.name}</strong>
                         </td>
+                        <td className="phase-cell">{raw.phase || "—"}</td>
                         <td>{formatPredecessors(item.predecessors)}</td>
                         {method === "PERT" ? (
                           <>
@@ -909,6 +1156,18 @@ function App() {
           {method !== "Crashing" && <div id="crash-history" />}
         </section>
       </main>
+      <ReportDialog
+        open={reportOpen}
+        projectName={SAMPLE_PROJECT_NAME}
+        text={reportText}
+        svg={networkSvg}
+        width={graph.width}
+        height={graph.height}
+        onClose={() => setReportOpen(false)}
+      >
+        <h3 className="report-gantt-title">Diagrama de Gantt</h3>
+        <GanttChart activities={result.activities} projectDuration={result.projectDuration} />
+      </ReportDialog>
     </div>
   );
 }

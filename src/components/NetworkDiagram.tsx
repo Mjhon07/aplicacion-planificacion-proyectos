@@ -18,6 +18,7 @@ type Props = {
   onCrash: (id: string) => void;
   criticalPathLabel: string;
   projectDurationLabel: string;
+  onDownloadPng?: () => void;
 };
 
 export default function NetworkDiagram({
@@ -32,6 +33,7 @@ export default function NetworkDiagram({
   onCrash,
   criticalPathLabel,
   projectDurationLabel,
+  onDownloadPng,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
@@ -114,6 +116,11 @@ export default function NetworkDiagram({
           <button type="button" className="button button-secondary zoom-btn" onClick={goToStart} title="Ir al nodo Inicio">
             Ir a Inicio
           </button>
+          {onDownloadPng && (
+            <button type="button" className="button button-secondary zoom-btn" onClick={onDownloadPng} title="Descargar el diagrama completo en PNG">
+              PNG
+            </button>
+          )}
           <button type="button" className="zoom" onClick={() => setZoomClamped(zoom - 0.1)} title="Alejar">
             −
           </button>
