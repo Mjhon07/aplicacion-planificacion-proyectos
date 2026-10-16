@@ -155,6 +155,13 @@ function money(n: number): string {
   return `$${n.toLocaleString("es-ES")}`;
 }
 
+function parseWeeks(value: string): number | null {
+  const trimmed = value.trim().replace(",", ".");
+  if (!/^\d+\.?\d*$/.test(trimmed)) return null;
+  const weeks = Number(trimmed);
+  return Number.isFinite(weeks) ? weeks : null;
+}
+
 function App() {
   const [method, setMethod] = useState<Method>("CPM");
   const [activeSection, setActiveSection] = useState<Section>("dashboard");
@@ -165,10 +172,10 @@ function App() {
   const [activityCountInput, setActivityCountInput] = useState(String(SAMPLE_ACTIVITIES.length));
   const [excelNote, setExcelNote] = useState("");
   const [reportOpen, setReportOpen] = useState(false);
-  const [targetWeeks, setTargetWeeks] = useState(0);
+  const [targetInput, setTargetInput] = useState("");
   const [targetEdited, setTargetEdited] = useState(false);
   const [savedBase, setSavedBase] = useState<Activity[] | null>(null);
-  const [compressTarget, setCompressTarget] = useState(20);
+  const [compressInput, setCompressInput] = useState("");
   const [compressEdited, setCompressEdited] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -182,12 +189,14 @@ function App() {
     return ["Inicio", ...result.criticalPath].join(" → ");
   }, [result.criticalPath, activities.length]);
 
+  const targetWeeks = parseWeeks(targetInput);
+
   useEffect(() => {
-    if (!targetEdited) setTargetWeeks(pertResult.projectDuration);
+    if (!targetEdited) setTargetInput(String(pertResult.projectDuration));
   }, [pertResult.projectDuration, targetEdited]);
 
   const odds = useMemo(
-    () => completionProbability(targetWeeks, pertResult.projectDuration, pertResult.projectStdDev ?? 0),
+    () => (targetWeeks === null ? null : completionProbability(targetWeeks, pertResult.projectDuration, pertResult.projectStdDev ?? 0)),
     [targetWeeks, pertResult.projectDuration, pertResult.projectStdDev],
   );
   const networkSvg = useMemo(
@@ -198,12 +207,22 @@ function App() {
     const source = savedBase ?? activities;
     return source.map((activity) => ({ ...activity, predecessors: [...activity.predecessors], crashed: false }));
   }, [savedBase, activities]);
-  const compressPlan = useMemo(() => compressToTarget(baseActivities, compressTarget), [baseActivities, compressTarget]);
+  const compressTarget = parseWeeks(compressInput);
+  const compressPlan = useMemo(
+    () => (compressTarget === null ? null : compressToTarget(baseActivities, compressTarget)),
+    [baseActivities, compressTarget],
+  );
   const baseResult = useMemo(() => computeProject(baseActivities, "Crashing"), [baseActivities]);
-  const acceleratedResult = useMemo(() => computeProject(compressPlan.activities, "Crashing"), [compressPlan.activities]);
+  const acceleratedResult = useMemo(
+    () => (compressPlan ? computeProject(compressPlan.activities, "Crashing") : baseResult),
+    [compressPlan, baseResult],
+  );
 
   useEffect(() => {
-    if (!compressEdited) setCompressTarget(Math.max(0, Math.round((baseResult.projectDuration - 2) * 100) / 100));
+    if (!compressEdited) {
+      const suggested = Math.max(0, Math.round((baseResult.projectDuration - 2) * 100) / 100);
+      setCompressInput(String(suggested));
+    }
   }, [baseResult.projectDuration, compressEdited]);
 
   const reportText = useMemo(
@@ -214,9 +233,9 @@ function App() {
         activities,
         result,
         pert: pertResult,
-        targetWeeks,
-      })}\n\n${compressPlan.summary}`,
-    [method, activities, result, pertResult, targetWeeks, compressPlan.summary],
+        targetWeeks: targetWeeks ?? pertResult.projectDuration,
+      })}\n\n${compressPlan?.summary ?? "Escribe las semanas objetivo para calcular la compresión."}`,
+    [method, activities, result, pertResult, targetWeeks, compressPlan],
   );
 
   const active = activities.find((a) => a.id === selected) ?? activities[0];
@@ -325,6 +344,7 @@ function App() {
   const calculate = () => setCalcPulse((n) => n + 1);
 
   const applyCompressedPlan = () => {
+    if (!compressPlan) return;
     setActivities(compressPlan.activities.map((activity) => ({ ...activity, predecessors: [...activity.predecessors] })));
     setCrashHistory(compressPlan.steps);
     setMethod("Crashing");
@@ -468,7 +488,7 @@ function App() {
             <Button className="button-secondary" onClick={() => fileInputRef.current?.click()}>
               Importar Excel
             </Button>
-            <Button className="button-secondary" onClick={() => downloadWorkbook(buildWorkbook(activities, result, targetWeeks), "pathwise-lsc.xlsx")}>
+            <Button className="button-secondary" onClick={() => downloadWorkbook(buildWorkbook(activities, result, targetWeeks ?? undefined), "pathwise-lsc.xlsx")}>
               Exportar Excel
             </Button>
             <Button className="button-secondary" onClick={() => setReportOpen(true)}>
@@ -677,17 +697,32 @@ function App() {
                             />
                           </label>
                         </div>
+                        <div className="pert-stats project">
+                          <div>
+                            <span>Tiempo del proyecto</span>
+                            <strong>{fmt(result.projectDuration)} sem.</strong>
+                          </div>
+                          <div>
+                            <span>Varianza del proyecto</span>
+                            <strong>{fmt(result.projectVariance ?? 0)}</strong>
+                          </div>
+                          <div>
+                            <span>Desv. estándar del proyecto</span>
+                            <strong>{fmt(result.projectStdDev ?? 0)}</strong>
+                          </div>
+                        </div>
+                        <p className="pert-note">La varianza del proyecto es la suma de las varianzas de la ruta crítica ({result.criticalPath.join(" → ") || "—"}).</p>
                         <div className="pert-stats">
                           <div>
-                            <span>t esperado</span>
+                            <span>t de esta actividad</span>
                             <strong>{fmt(activeComputed?.expectedTime ?? 0)} sem.</strong>
                           </div>
                           <div>
-                            <span>Varianza</span>
+                            <span>Varianza de la actividad</span>
                             <strong>{fmt(activeComputed?.variance ?? 0)}</strong>
                           </div>
                           <div>
-                            <span>Desv. estándar</span>
+                            <span>Desv. de la actividad</span>
                             <strong>{fmt(activeComputed?.stdDev ?? 0)}</strong>
                           </div>
                         </div>
@@ -854,17 +889,20 @@ function App() {
               <label>
                 Quiero terminar en (semanas)
                 <input
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  value={compressTarget}
+                  type="text"
+                  inputMode="decimal"
+                  value={compressInput}
+                  placeholder="Ej. 20"
                   onChange={(event) => {
                     setCompressEdited(true);
-                    setCompressTarget(Math.max(0, Number(event.target.value) || 0));
+                    setCompressInput(event.target.value);
                   }}
                 />
               </label>
-              <p>{savedBase ? "La base está fija y no cambia si editas la red." : "La base es el plan en pantalla con tiempos normales."} {compressPlan.summary}</p>
+              <p>
+                {savedBase ? "La base está fija y no cambia si editas la red." : "La base es el plan en pantalla con tiempos normales."}{" "}
+                {compressPlan ? compressPlan.summary : "Borra el número y escribe las semanas que quieres."}
+              </p>
             </div>
             <div className="plan-compare">
               <article>
@@ -880,8 +918,8 @@ function App() {
                 <p>Inicio → {acceleratedResult.criticalPath.join(" → ") || "—"}</p>
               </article>
             </div>
-            <CostCurve points={compressPlan.points} />
-            {compressPlan.steps.length > 0 && (
+            {compressPlan && <CostCurve points={compressPlan.points} />}
+            {compressPlan && compressPlan.steps.length > 0 && (
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -913,7 +951,7 @@ function App() {
               </div>
             )}
             <div className="plan-actions">
-              <Button className="button-primary" onClick={applyCompressedPlan} disabled={!compressPlan.steps.length}>
+              <Button className="button-primary" onClick={applyCompressedPlan} disabled={!compressPlan || !compressPlan.steps.length}>
                 Aplicar plan acelerado
               </Button>
               <Button className="button-secondary" onClick={restoreBasePlan}>
@@ -927,7 +965,7 @@ function App() {
               <div className="panel-heading">
                 <div>
                   <div className="panel-title">Resultados PERT del proyecto</div>
-                  <div className="panel-subtitle">Basados en la suma de la ruta crítica · t = (a + 4m + b) / 6</div>
+                  <div className="panel-subtitle">El más probable es el tiempo esperado. El optimista es μ − σ y el pesimista es μ + σ.</div>
                 </div>
               </div>
               <div className="pert-global">
@@ -944,52 +982,46 @@ function App() {
                   <strong>{fmt(result.projectStdDev ?? 0)} sem.</strong>
                 </div>
                 <div>
-                  <span>Σ Optimista (a)</span>
+                  <span>Tiempo optimista (μ − σ)</span>
                   <strong>{fmt(result.projectOptimistic ?? 0)} sem.</strong>
                 </div>
                 <div>
-                  <span>Σ Más probable (m)</span>
-                  <strong>{fmt(result.projectMostLikely ?? 0)} sem.</strong>
+                  <span>Tiempo más probable (μ)</span>
+                  <strong>{fmt(result.projectMostLikely ?? result.projectDuration)} sem.</strong>
                 </div>
                 <div>
-                  <span>Σ Pesimista (b)</span>
+                  <span>Tiempo pesimista (μ + σ)</span>
                   <strong>{fmt(result.projectPessimistic ?? 0)} sem.</strong>
-                </div>
-                <div>
-                  <span>μ − σ</span>
-                  <strong>{fmt(result.projectDuration - (result.projectStdDev ?? 0))} sem.</strong>
-                </div>
-                <div>
-                  <span>μ + σ</span>
-                  <strong>{fmt(result.projectDuration + (result.projectStdDev ?? 0))} sem.</strong>
                 </div>
               </div>
               <div className="probability-box">
                 <label>
                   Quiero terminar en (semanas)
                   <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={targetWeeks}
+                    type="text"
+                    inputMode="decimal"
+                    value={targetInput}
+                    placeholder="Ej. 26"
                     onChange={(event) => {
                       setTargetEdited(true);
-                      setTargetWeeks(Math.max(0, Number(event.target.value) || 0));
+                      setTargetInput(event.target.value);
                     }}
                   />
                 </label>
                 <div>
                   <span>Z = (X − μ) / σ</span>
-                  <strong>{odds.certain ? "σ = 0" : fmt(odds.z ?? 0)}</strong>
+                  <strong>{odds === null ? "—" : odds.certain ? "σ = 0" : fmt(odds.z ?? 0)}</strong>
                 </div>
                 <div>
                   <span>P(terminar en X o menos)</span>
-                  <strong>{(odds.probability * 100).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %</strong>
+                  <strong>{odds === null ? "—" : `${(odds.probability * 100).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`}</strong>
                 </div>
                 <p>
-                  {odds.certain
-                    ? "Las estimaciones no tienen dispersión. El proyecto termina exactamente en μ."
-                    : "Se asume que la duración del proyecto sigue una distribución normal."}
+                  {odds === null
+                    ? "Borra el número y escribe las semanas que quieres evaluar."
+                    : odds.certain
+                      ? "Las estimaciones no tienen dispersión. El proyecto termina exactamente en μ."
+                      : "Se asume que la duración del proyecto sigue una distribución normal."}
                 </p>
               </div>
             </section>

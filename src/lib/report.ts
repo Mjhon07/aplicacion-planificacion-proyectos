@@ -87,7 +87,9 @@ export function buildReport(options: {
     `- Tiempo esperado μ: ${weeks(mean)}`,
     `- Varianza: ${(pert.projectVariance ?? 0).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     `- Desviación estándar σ: ${weeks(sigma)}`,
-    `- Intervalo μ − σ a μ + σ: ${weeks(mean - sigma)} a ${weeks(mean + sigma)}`,
+    `- Tiempo optimista (μ − σ): ${weeks(mean - sigma)}`,
+    `- Tiempo más probable: ${weeks(mean)}`,
+    `- Tiempo pesimista (μ + σ): ${weeks(mean + sigma)}`,
     odds.certain
       ? `- No hay incertidumbre (σ = 0). Terminar en ${weeks(targetWeeks)} es ${odds.probability === 1 ? "seguro" : "imposible"} con estas estimaciones.`
       : `- Z para ${weeks(targetWeeks)}: ${(odds.z ?? 0).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,

@@ -249,11 +249,12 @@ export function computeProject(activities: Activity[], method: Method): ProjectR
 
   if (method === "PERT") {
     const critActs = activities.filter((a) => criticalSet.has(a.id));
-    projectVariance = round2(critActs.reduce((sum, a) => sum + variance(a.optimistic, a.pessimistic), 0));
-    projectStdDev = round2(Math.sqrt(projectVariance));
-    projectOptimistic = round2(critActs.reduce((sum, a) => sum + a.optimistic, 0));
-    projectMostLikely = round2(critActs.reduce((sum, a) => sum + a.mostLikely, 0));
-    projectPessimistic = round2(critActs.reduce((sum, a) => sum + a.pessimistic, 0));
+    const varianceSum = critActs.reduce((sum, a) => sum + variance(a.optimistic, a.pessimistic), 0);
+    projectVariance = round2(varianceSum);
+    projectStdDev = round2(Math.sqrt(varianceSum));
+    projectMostLikely = round2(projectDuration);
+    projectOptimistic = round2(projectDuration - projectStdDev);
+    projectPessimistic = round2(projectDuration + projectStdDev);
   }
 
   const totalCost =
@@ -404,13 +405,16 @@ export const SAMPLE_PROJECT_NAME = "Reconocimiento de lengua de señas (LSC)";
 const PHASE_DATA = "Fases iniciales y procesamiento de datos";
 const PHASE_APP = "Desarrollo frontend, integración y pruebas";
 
-/** Duración dada por el usuario; a/m/b y crashing se derivan para que el ejemplo sirva en los 3 modos. */
 function sampleActivity(
   id: string,
   name: string,
   predecessors: string[],
-  weeks: number,
-  cost: number,
+  optimistic: number,
+  mostLikely: number,
+  pessimistic: number,
+  crashTime: number,
+  normalCost: number,
+  crashCost: number,
   phase: string,
 ): Activity {
   return createActivity({
@@ -418,24 +422,24 @@ function sampleActivity(
     name,
     phase,
     predecessors,
-    duration: weeks,
-    optimistic: Math.max(1, weeks - 1),
-    mostLikely: weeks,
-    pessimistic: weeks + 2,
-    normalTime: weeks,
-    crashTime: Math.max(1, weeks - 1),
-    normalCost: cost,
-    crashCost: Math.round(cost * 1.4),
+    duration: mostLikely,
+    optimistic,
+    mostLikely,
+    pessimistic,
+    normalTime: mostLikely,
+    crashTime,
+    normalCost,
+    crashCost,
   });
 }
 
 export const SAMPLE_ACTIVITIES: Activity[] = [
-  sampleActivity("A", "Requerimientos y Arquitectura", [], 3, 3500, PHASE_DATA),
-  sampleActivity("B", "Recolección de Corpus LSC", ["A"], 4, 2000, PHASE_DATA),
-  sampleActivity("C", "Preprocesamiento (Landmarks)", ["B"], 3, 2500, PHASE_DATA),
-  sampleActivity("D", "Entrenamiento del Modelo de IA", ["C"], 5, 4000, PHASE_DATA),
-  sampleActivity("E", "Validación y Ajuste IA", ["D"], 2, 1500, PHASE_APP),
-  sampleActivity("F", "Desarrollo de App Móvil", ["A"], 6, 5000, PHASE_APP),
-  sampleActivity("G", "Integración IA + App", ["E", "F"], 3, 2500, PHASE_APP),
-  sampleActivity("H", "Pruebas de Campo y Despliegue", ["G"], 2, 1000, PHASE_APP),
+  sampleActivity("A", "Requerimientos y Arquitectura", [], 2, 3, 5, 2, 3500, 5000, PHASE_DATA),
+  sampleActivity("B", "Recolección de Corpus LSC", ["A"], 3, 4, 6, 2, 2000, 3500, PHASE_DATA),
+  sampleActivity("C", "Preprocesamiento (Landmarks)", ["B"], 2, 3, 5, 1, 2500, 4000, PHASE_DATA),
+  sampleActivity("D", "Entrenamiento del Modelo de IA", ["C"], 3, 5, 8, 3, 4000, 7500, PHASE_DATA),
+  sampleActivity("E", "Validación y Ajuste IA", ["D"], 1, 2, 4, 1, 1500, 2500, PHASE_APP),
+  sampleActivity("F", "Desarrollo de App Móvil", ["A"], 4, 6, 9, 4, 5000, 8000, PHASE_APP),
+  sampleActivity("G", "Integración IA + App", ["E", "F"], 2, 3, 5, 2, 2500, 4000, PHASE_APP),
+  sampleActivity("H", "Pruebas de Campo y Despliegue", ["G"], 1, 2, 4, 1, 1000, 2000, PHASE_APP),
 ];
